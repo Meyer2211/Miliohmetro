@@ -1,0 +1,131 @@
+#include <WiFi.h>
+#include <WebServer.h>
+
+// pines
+#define PIN_RESISTENCIA 34
+#define PIN_BATERIA 35
+#define PIN_DAC 25
+
+// constantes
+const float VREF_ADC = 3.3;
+const int ADC_RES = 4095;
+const float G = 30.0;
+
+// wifi
+const char* ssid = "ESP32_MEDIDOR";
+const char* password = "12345678";
+
+WebServer server(80);
+
+// variables
+int modo = 1;   // 1, 2, 3
+
+// funciones
+
+// Promedio 
+int leerPromedio(int pin)
+{
+  int suma = 0;
+  for(int i = 0; i < 10; i++)
+  {
+    suma += analogRead(pin);
+    delay(2);
+  }
+  return suma / 10;
+}
+
+// Corriente según modo
+float obtenerCorriente()
+{
+  if (modo == 1) return 0.2;   // 200 mA
+  if (modo == 2) return 0.1;   // 100 mA
+  if (modo == 3) return 0.05;  // 50 mA
+  return 0.1;
+}
+
+// Ajustar Vref usando DAC
+void actualizarVref()
+{
+  if (modo == 1) dacWrite(PIN_DAC, 15);  // ~0.2V
+  if (modo == 2) dacWrite(PIN_DAC, 8);   // ~0.1V
+  if (modo == 3) dacWrite(PIN_DAC, 4);   // ~0.05V
+}
+
+// Calcular resistencia
+float calcularResistencia(int adc)
+{
+  if(adc == 0) return 0;
+
+  float V = (adc * VREF_ADC) / ADC_RES;
+  float I = obtenerCorriente();
+
+  float R = V / (I * G);
+  return R;
+}
+
+// Calcular batería (asume divisor x2)
+float leerBateria(int adc)
+{
+  float V = (adc * VREF_ADC) / ADC_RES;
+  return V * 2.0;
+}
+
+// end points
+
+// Enviar datos
+void handleDatos()
+{
+  int adc_res = leerPromedio(PIN_RESISTENCIA);
+  int adc_bat = leerPromedio(PIN_BATERIA);
+
+  float resistencia = calcularResistencia(adc_res);
+  float bateria = leerBateria(adc_bat);
+
+  String json = "{";
+  json += "\"resistencia\":" + String(resistencia, 4) + ",";
+  json += "\"bateria\":" + String(bateria, 2);
+  json += "}";
+
+  server.send(200, "application/json", json);
+}
+
+// Recibir modo
+void handleModo()
+{
+  if (server.hasArg("valor"))
+  {
+    modo = server.arg("valor").toInt();
+    actualizarVref();  // Cambia vref
+  }
+
+  server.send(200, "text/plain", "Modo actualizado");
+}
+
+void setup()
+{
+  Serial.begin(115200);
+
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+
+  // DAC inicial
+  actualizarVref();
+
+  // WiFi AP
+  WiFi.softAP(ssid, password);
+
+  Serial.println("IP:");
+  Serial.println(WiFi.softAPIP());
+
+  // Endpoints
+  server.on("/datos", handleDatos);
+  server.on("/modo", handleModo);
+
+  server.begin();
+}
+
+
+void loop()
+{
+  server.handleClient();
+}
