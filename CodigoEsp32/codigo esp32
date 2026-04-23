@@ -1,1 +1,140 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <SPI.h>
 
+// ------------------ WIFI ------------------
+const char* ssid = "ESP32_Miliohmetro";
+const char* password = "12345678";
+
+WebServer server(80);
+
+// ------------------ PINES ------------------
+#define PIN_DAC 25
+
+// SPI ADS1220
+#define PIN_CS   5
+#define PIN_SCLK 18
+#define PIN_MISO 19
+#define PIN_MOSI 23
+
+// ------------------ PARAMETROS ------------------
+float Vref = 0.1;       // Voltaje DAC
+float corriente = 0.1;  // Corriente estimada (A)
+
+// INA210
+#define GANANCIA 200.0
+
+// ------------------ CONFIG DAC ------------------
+void setDAC(float voltaje)
+{
+  uint8_t value = (voltaje / 3.3) * 255.0;
+  dacWrite(PIN_DAC, value);
+}
+
+// ------------------ SPI ADS1220 ------------------
+void ADS1220_init()
+{
+  pinMode(PIN_CS, OUTPUT);
+  digitalWrite(PIN_CS, HIGH);
+
+  SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI, PIN_CS);
+}
+
+long ADS1220_read()
+{
+  digitalWrite(PIN_CS, LOW);
+
+  // Leer 24 bits
+  long value = 0;
+  value |= SPI.transfer(0x00) << 16;
+  value |= SPI.transfer(0x00) << 8;
+  value |= SPI.transfer(0x00);
+
+  digitalWrite(PIN_CS, HIGH);
+
+  return value;
+}
+
+// ------------------ CONVERSION ------------------
+float calcularVoltaje(long raw)
+{
+  // ADC 24 bits (suponiendo referencia 3.3V)
+  return (raw / 8388607.0) * 3.3;
+}
+
+float calcularResistencia(float Vout)
+{
+  // R = V / (G * I)
+  return Vout / (GANANCIA * corriente);
+}
+
+// ------------------ ENDPOINTS ------------------
+
+void handleRoot()
+{
+  server.send(200, "text/plain", "ESP32 Miliohmetro activo");
+}
+
+void setModo1()
+{
+  Vref = 0.2;
+  corriente = 0.2;
+  setDAC(Vref);
+  server.send(200, "text/plain", "Modo 1 (200mA)");
+}
+
+void setModo2()
+{
+  Vref = 0.1;
+  corriente = 0.1;
+  setDAC(Vref);
+  server.send(200, "text/plain", "Modo 2 (100mA)");
+}
+
+void setModo3()
+{
+  Vref = 0.05;
+  corriente = 0.05;
+  setDAC(Vref);
+  server.send(200, "text/plain", "Modo 3 (50mA)");
+}
+
+void getResistencia()
+{
+  long raw = ADS1220_read();
+  float Vout = calcularVoltaje(raw);
+  float R = calcularResistencia(Vout);
+
+  String response = String(R, 6);
+  server.send(200, "text/plain", response);
+}
+
+// ------------------ SETUP ------------------
+
+void setup()
+{
+  Serial.begin(115200);
+
+  WiFi.softAP(ssid, password);
+
+  ADS1220_init();
+
+  // Rutas HTTP
+  server.on("/", handleRoot);
+  server.on("/mode1", setModo1);
+  server.on("/mode2", setModo2);
+  server.on("/mode3", setModo3);
+  server.on("/read", getResistencia);
+
+  server.begin();
+
+  // Inicial
+  setDAC(Vref);
+}
+
+// ------------------ LOOP ------------------
+
+void loop()
+{
+  server.handleClient();
+}
